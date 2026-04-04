@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Protocol-Lens",
+  "version": "0.1.0",
+  "description": "Real-time API contract drift detector",
+  "devtools_page": "devtools.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"]
+}
