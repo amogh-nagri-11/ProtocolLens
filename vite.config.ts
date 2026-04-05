@@ -9,6 +9,8 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         { src: 'manifest.json', dest: '.' },
+        { src: 'src/devtools/devtools.html', dest: '.' },
+        { src: 'src/panel/panel.html', dest: '.' },
       ]
     })
   ],
