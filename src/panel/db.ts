@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { InferredSchema } from './gemini'
+import type { DriftReport } from './drift'
 
 // Tells TypeScript the shape of our database
 interface ProtocolLensDB extends DBSchema {
@@ -17,16 +18,30 @@ interface ProtocolLensDB extends DBSchema {
       payload: unknown
     }
   }
+  drifts: {
+    key: string
+    value: DriftReport
+  }
+  spec: {
+    key: string 
+    value: unknown
+  }
 }
 
 let db: IDBPDatabase<ProtocolLensDB>
 
 export async function getDB() {
   if (!db) {
-    db = await openDB<ProtocolLensDB>('protocol-lens', 1, {
-      upgrade(db) {
-        db.createObjectStore('schemas')
-        db.createObjectStore('entries', { autoIncrement: true })
+    db = await openDB<ProtocolLensDB>('protocol-lens', 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('schemas')
+          db.createObjectStore('entries', { autoIncrement: true })
+        }
+        if (oldVersion < 2) {
+          db.createObjectStore('drifts') 
+          db.createObjectStore('spec')
+        }
       },
     })
   }
@@ -51,4 +66,24 @@ export async function getAllSchemas() {
 export async function saveEntry(entry: ProtocolLensDB['entries']['value']) {
   const db = await getDB()
   await db.add('entries', entry)
+}
+
+export async function saveDrift(report: DriftReport) {
+  const db = await getDB() 
+  await db.put('drifts', report, report.endpoint) 
+}
+
+export async function getDrift(endpoint: string) { 
+  const db = await getDB() 
+  return (await db.get('drifts', endpoint)) ?? null
+}
+
+export async function saveSpec(spec: unknown) {
+  const db = await getDB() 
+  await db.put('spec', spec, 'current') 
+}
+
+export async function getSpec() {
+  const db = await getDB() 
+  return (await db.get('spec', 'current')) ?? null
 }
