@@ -45,6 +45,7 @@ export function findSpecSchema(
 
   // Try exact path match first
   let pathItem = spec.paths?.[path]
+  console.log(pathItem);
 
   // If no exact match, try matching with path parameters
   // e.g. spec has /users/{id} but actual path is /users/123
@@ -54,6 +55,7 @@ export function findSpecSchema(
       const regex = new RegExp(`^${pattern}$`)
       if (regex.test(path)) {
         pathItem = spec.paths![specPath]
+        console.log("no exact match ",pathItem)
         break
       }
     }
@@ -107,6 +109,8 @@ export function analyzeDrift(
   method: string,
   path: string
 ): DriftReport {
+  console.log('analyzing drift');
+
   const drifts: DriftItem[] = []
   const specSchema = findSpecSchema(spec, method, path)
 

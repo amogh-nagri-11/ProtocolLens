@@ -1,17 +1,17 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import Groq from 'groq-sdk'
 
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string
-const genAI = new GoogleGenerativeAI(apiKey)
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' })
+const client = new Groq({
+  apiKey: import.meta.env.VITE_GROQ_API_KEY as string,
+  dangerouslyAllowBrowser: true
+})
 
-// What we expect Gemini to return for each field
 export type FieldSchema = {
-  type: string           // e.g. "string", "number", "boolean", "array", "object"
-  semanticType: string   // e.g. "ISO-8601-datetime", "uuid", "email", "currency", "url", "unknown"
-  nullable: boolean      // true if any sample had null for this field
-  optional: boolean      // true if field was missing in some samples
-  confidence: number     // 0-1, how confident Gemini is
-  notes: string          // any extra observations
+  type: string
+  semanticType: string
+  nullable: boolean
+  optional: boolean
+  confidence: number
+  notes: string
 }
 
 export type InferredSchema = {
@@ -23,7 +23,8 @@ export type InferredSchema = {
 export async function inferSchema(
   method: string,
   path: string,
-  samples: unknown[]
+  samples: unknown[],
+  retries = 2
 ): Promise<InferredSchema> {
   const prompt = `
 You are an API schema inference engine. Analyze these ${samples.length} JSON response samples from the endpoint "${method} ${path}" and infer the schema.
@@ -59,16 +60,28 @@ Format:
 For nested objects, use dot notation for field names (e.g. "user.id", "user.email").
 `
 
-  const result = await model.generateContent(prompt)
-  const text = result.response.text().trim()
+  try {
+    const completion = await client.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 2000,
+    })
 
-  // Strip markdown code fences if Gemini adds them anyway
-  const clean = text.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim()
-  const parsed = JSON.parse(clean)
+    const text = completion.choices[0]?.message?.content?.trim() ?? ''
+    const clean = text.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim()
+    const parsed = JSON.parse(clean)
 
-  return {
-    endpoint: `${method} ${path}`,
-    fields: parsed.fields,
-    inferredAt: Date.now(),
+    return {
+      endpoint: `${method} ${path}`,
+      fields: parsed.fields,
+      inferredAt: Date.now(),
+    }
+  } catch (err: unknown) {
+    if (retries > 0 && err instanceof Error && err.message.includes('429')) {
+      await new Promise(resolve => setTimeout(resolve, 10000))
+      return inferSchema(method, path, samples, retries - 1)
+    }
+    throw err
   }
 }
