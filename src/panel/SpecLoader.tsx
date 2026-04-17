@@ -6,6 +6,7 @@ type Props = {
 }
 
 export function SpecLoader({ onSpecLoaded }: Props) {
+  console.log("specloader called")
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

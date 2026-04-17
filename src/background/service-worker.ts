@@ -8,3 +8,6 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     console.log(_sendResponse);
   }
 })
+
+// Keepalive — prevents service worker from going inactive
+chrome.runtime.onConnect.addListener(() => {})

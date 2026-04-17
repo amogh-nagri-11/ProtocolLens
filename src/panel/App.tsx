@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { addToBatch } from './batcher'
 import { inferSchema, type InferredSchema, type FieldSchema } from './gemini'
 import { saveSchema, getSchema, saveEntry, saveDrift, getDrift, saveSpec, getSpec } from './db'
 import { generateCode } from './schema-generator'
 import { CodeBlock } from './CodeBlock'
-import { analyzeDrift } from './drift'
+import { analyzeDrift } from './drift.ts'
 import { DriftView } from './DriftView'
 import { SpecLoader } from './SpecLoader'
-import type { OpenAPIV3 } from 'openapi-types'
+import { OpenAPIV3 } from 'openapi-types'
 import type { DriftReport } from './drift'
+
+console.log('App.tsx running')
 
 type HarEntry = {
   url: string
@@ -131,6 +133,13 @@ export default function App() {
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
   const [driftCounts, setDriftCounts] = useState<Map<string, number>>(new Map())
 
+  const specRef = useRef<OpenAPIV3.Document | null>(null)
+
+  useEffect(() => {
+    specRef.current = spec 
+  }, [spec])
+
+
   // Load persisted spec on mount
   useEffect(() => {
     getSpec().then(saved => {
@@ -158,8 +167,9 @@ export default function App() {
         await saveSchema(inferred)
 
         // Auto-run drift if spec is loaded
-        const currentSpec = await getSpec()
+        const currentSpec = specRef.current ?? await getSpec()
         if (currentSpec != null) {
+          console.log("Calling analyzeDrift")
           const report = analyzeDrift(
             inferred,
             currentSpec as OpenAPIV3.Document,
@@ -180,6 +190,7 @@ export default function App() {
   }, [])
 
   async function handleSpecLoaded(newSpec: OpenAPIV3.Document) {
+    specRef.current = newSpec
     setSpec(newSpec)
     await saveSpec(newSpec)
   }
@@ -199,12 +210,12 @@ export default function App() {
         setSchema(cached)
 
         // Load or generate drift report
-        if (spec) {
+        if (specRef.current) {
           const cachedDrift = await getDrift(key)
           if (cachedDrift != null) {
             setDriftReport(cachedDrift)
           } else {
-            const report = analyzeDrift(cached, spec, entry.method, path)
+            const report = analyzeDrift(cached, specRef.current, entry.method, path)
             await saveDrift(report)
             setDriftReport(report)
           }
@@ -218,8 +229,8 @@ export default function App() {
       await saveSchema(inferred)
       setSchema(inferred)
 
-      if (spec) {
-        const report = analyzeDrift(inferred, spec, entry.method, path)
+      if (specRef.current) {
+        const report = analyzeDrift(inferred, specRef.current, entry.method, path)
         await saveDrift(report)
         setDriftReport(report)
       }
@@ -227,6 +238,28 @@ export default function App() {
       console.error('Inference failed:', err)
     } finally {
       setInferring(false)
+    }
+  }
+
+  async function handleTabClick(t: Tab) {
+    setTab(t)
+    const currentSpec = specRef.current ?? spec
+
+    if (t === 'drift' && selected && currentSpec) {
+      try {
+        const path = new URL(selected.url).pathname
+        const key = `${selected.method} ${path}`
+        const schema = await getSchema(key)
+        if (schema) {
+          const report = analyzeDrift(schema, currentSpec, selected.method, path)
+          await saveDrift(report)
+          setDriftReport(report)
+        } else {
+          setDriftReport(null)
+        }
+      } catch (err) {
+        console.error('Drift analysis failed:', err)
+      }
     }
   }
 
@@ -275,14 +308,14 @@ export default function App() {
         </div>
 
         {/* Right panel */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f0f0f' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0f0f0f', minWidth: 0, minHeight: 0 }}>
           {selected ? (
             <>
               <div style={{ display: 'flex', borderBottom: '1px solid #333' }}>
                 {(['payload', 'schema', 'drift'] as Tab[]).map((t) => (
                   <button
                     key={t}
-                    onClick={() => setTab(t)}
+                    onClick={() => handleTabClick(t)}
                     style={{
                       padding: '8px 16px',
                       background: 'transparent',
@@ -309,13 +342,14 @@ export default function App() {
                 )}
               </div>
 
-              <div style={{ flex: 1, overflowY: 'auto', padding: tab === 'schema' || tab === 'drift' ? 0 : 16 }}>
+              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                <div style={{ padding: tab === 'schema' || tab === 'drift' ? 0 : 16, minHeight: '100%', boxSizing: 'border-box' }}>
                 {tab === 'payload' && (
                   <>
                     <div style={{ fontSize: 11, color: '#555', marginBottom: 12 }}>
                       {selected.url}
                     </div>
-                    <pre style={{ fontSize: 12, color: '#ce9178', margin: 0 }}>
+                    <pre style={{ fontSize: 12, color: '#ce9178', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {JSON.stringify(selected.payload, null, 2)}
                     </pre>
                   </>
@@ -339,6 +373,7 @@ export default function App() {
                         </div>
                 )}
               </div>
+            </div>
             </>
           ) : (
             <div style={{ color: '#555', fontSize: 13, margin: 'auto', textAlign: 'center' }}>

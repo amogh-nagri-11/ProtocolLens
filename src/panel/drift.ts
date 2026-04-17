@@ -1,6 +1,8 @@
 import type { OpenAPIV3 } from 'openapi-types'
 import type { InferredSchema } from './gemini'
 
+console.log("file loaded drift.js");
+
 export type DriftSeverity = 'error' | 'warning' | 'info'
 
 export type DriftItem = {
@@ -17,8 +19,39 @@ export type DriftReport = {
   checkedAt: number
 }
 
+function getBasePaths(spec: OpenAPIV3.Document): string[] {
+  console.log("getBasePaths called")
+  if (!spec.servers) return []
+
+  return spec.servers.map(server => {
+    try {
+      // OpenAPI server URLs are often relative paths like "/api/v3".
+      // Give URL() a dummy origin so both absolute and relative values parse.
+      const url = new URL(server.url, 'https://example.com')
+      return url.pathname.replace(/\/$/, '')
+    } catch {
+      return ''
+    }
+  })
+}
+
+function normalizePath(
+  rawPath: string,
+  basePaths: string[]
+): string {
+  console.log("normalized paths called")
+  for (const base of basePaths) {
+    if (rawPath.startsWith(base)) {
+      const stripped = rawPath.slice(base.length)
+      return stripped || '/'
+    }
+  }
+  return rawPath
+}
+
 // Converts an OpenAPI schema type to our simple type string
 function openApiTypeToSimple(schema: OpenAPIV3.SchemaObject): string {
+  console.log("openApiTypeTosimple called")
   if (schema.type) return schema.type
   if (schema.oneOf || schema.anyOf) return 'union'
   if (schema.allOf) return 'object'
@@ -27,6 +60,7 @@ function openApiTypeToSimple(schema: OpenAPIV3.SchemaObject): string {
 
 // Checks if a field's inferred type is compatible with the spec type
 function isTypeCompatible(inferred: string, specType: string): boolean {
+  console.log("isTypeCompatible called")
   if (inferred === specType) return true
   // number covers integer
   if (specType === 'integer' && inferred === 'number') return true
@@ -40,26 +74,41 @@ export function findSpecSchema(
   method: string,
   path: string
 ): OpenAPIV3.SchemaObject | null {
+  console.log("findSpecSchema called")
+
   // Normalize method to lowercase
   const lowerMethod = method.toLowerCase() as keyof OpenAPIV3.PathItemObject
 
-  // Try exact path match first
-  let pathItem = spec.paths?.[path]
-  console.log(pathItem);
+  const basePath = getBasePaths(spec)
+  const normalizedPath = normalizePath(path, basePath) 
 
-  // If no exact match, try matching with path parameters
-  // e.g. spec has /users/{id} but actual path is /users/123
-  if (!pathItem) {
+  console.log("Base path: ", basePath)
+  console.log("Normalized path: ", normalizedPath)
+
+  const pathsToTry = [normalizedPath, path]; 
+
+  let pathItem
+
+  for (const tryPath of pathsToTry) {
+    // Exact match 
+    pathItem = spec.paths?.[tryPath]
+    if (pathItem) break 
+
+    // Path parameter match e.g. /pet/123 → /pet/{petId}
     for (const specPath of Object.keys(spec.paths || {})) {
       const pattern = specPath.replace(/\{[^}]+\}/g, '[^/]+')
       const regex = new RegExp(`^${pattern}$`)
-      if (regex.test(path)) {
+      if (regex.test(tryPath)) {
         pathItem = spec.paths![specPath]
-        console.log("no exact match ",pathItem)
         break
       }
     }
+    if (pathItem) break 
   }
+
+
+  console.log("spec paths: ", Object.keys(spec.paths || {}));
+  console.log("pahtitem: ",pathItem);
 
   if (!pathItem) return null
 

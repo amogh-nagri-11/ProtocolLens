@@ -26,8 +26,15 @@ export async function inferSchema(
   samples: unknown[],
   retries = 2
 ): Promise<InferredSchema> {
+  const truncatedSamples = samples 
+    .slice(0,3)
+    .map( s => {
+      const str = JSON.stringify(s)
+      return str.length > 500 ? JSON.parse(str.slice(0,500) + '..."}') : s
+    })
+
   const prompt = `
-You are an API schema inference engine. Analyze these ${samples.length} JSON response samples from the endpoint "${method} ${path}" and infer the schema.
+You are an API schema inference engine. Analyze these ${truncatedSamples.length} JSON response samples from the endpoint "${method} ${path}" and infer the schema.
 
 For each field in the response, determine:
 - "type": the JSON type (string, number, boolean, array, object, null)
@@ -40,7 +47,7 @@ For each field in the response, determine:
 - "notes": anything unusual, like "sometimes returns string, sometimes number"
 
 Samples:
-${JSON.stringify(samples, null, 2)}
+${JSON.stringify(truncatedSamples, null, 2)}
 
 Respond ONLY with a valid JSON object. No markdown, no backticks, no explanation.
 Format:
@@ -65,18 +72,28 @@ For nested objects, use dot notation for field names (e.g. "user.id", "user.emai
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 4000,
     })
 
     const text = completion.choices[0]?.message?.content?.trim() ?? ''
     const clean = text.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim()
-    const parsed = JSON.parse(clean)
-
-    return {
-      endpoint: `${method} ${path}`,
-      fields: parsed.fields,
-      inferredAt: Date.now(),
+    try {
+      const parsed = JSON.parse(clean)
+      return {
+        endpoint: `${method} ${path}`,
+        fields: parsed.fields,
+        inferredAt: Date.now(),
+      } 
+    } catch {
+      const partial = clean.substring(0, clean.lastIndexOf('}}}')+3)
+      const parsed = JSON.parse(partial + "}}")
+      return {
+        endpoint: `${method} ${path}`,
+        fields: parsed.fileds ?? {}, 
+        inferredAt: Date.now(),
+      }
     }
+
   } catch (err: unknown) {
     if (retries > 0 && err instanceof Error && err.message.includes('429')) {
       await new Promise(resolve => setTimeout(resolve, 10000))

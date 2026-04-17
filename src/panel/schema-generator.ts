@@ -1,7 +1,8 @@
-import { z } from 'zod'; 
+// import { z } from 'zod'; 
 import type { FieldSchema, InferredSchema } from './gemini';
 
 function fieldToZod(field: FieldSchema): string {
+    console.log("fieldToZod called")
     let zodType: string; 
 
     // map the more specific semantic types first
@@ -48,6 +49,7 @@ function fieldToZod(field: FieldSchema): string {
 } 
 
 function FieldToTs(field: FieldSchema): string { 
+    console.log("fieldtots called")
     let tsType: string 
 
     switch (field.semanticType) {
@@ -91,6 +93,7 @@ function FieldToTs(field: FieldSchema): string {
 }
 
 function buildZodSchema (fields: Record<string, FieldSchema>): string {
+    console.log("buildzodschema called")
     const topLevel: Record<string, string> = {} 
 
     for (const [name, field] of Object.entries(fields)) {
@@ -110,6 +113,7 @@ function buildTsInterface(
     name: string, 
     fields: Record<string, FieldSchema>
 ): string {
+    console.log("buildtsinterface called")
     const lines = Object.entries(fields)
         .filter(([fieldName]) => !fieldName.includes('.'))
         .map(([fieldName, field]) => {
@@ -128,6 +132,7 @@ export function generateCode(schema: InferredSchema): {
     tsInterface: string
     schemaName: string
 } {
+    console.log("generatecode called")
     // Turn "GET /api/users" into "GetApiUsers"
     const schemaName = schema.endpoint
         .replace(/[^a-zA-Z0-9/]/g, ' ')
@@ -139,13 +144,13 @@ export function generateCode(schema: InferredSchema): {
     const zodSchema = `const ${schemaName}Schema = ${buildZodSchema(schema.fields)}`
     const tsInterface = buildTsInterface(schemaName, schema.fields)
 
-    // Validate the zod schema actually parses (catches bugs in generation)
-    try {
-        // We just check it's valid JS — actual runtime validation happens in the app
-        new Function('z', `return ${buildZodSchema(schema.fields)}`)(z)
-    } catch (err) {
-        console.warn('Generated Zod schema has issues:', err)
-    }
+    // Validate the zod schema actually parses (catches bugs in generation) - no use for this block hence commented out
+    // try {
+    //     // We just check it's valid JS — actual runtime validation happens in the app
+    //     new Function('z', `return ${buildZodSchema(schema.fields)}`)(z)
+    // } catch (err) {
+    //     console.warn('Generated Zod schema has issues:', err)
+    // }
 
     return { zodSchema, tsInterface, schemaName }
 }
