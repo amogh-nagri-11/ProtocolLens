@@ -198,17 +198,6 @@ APIs, you can use the local Ollama mode instead (see Configuration).
 
 ---
 
-## Roadmap
-
-- [ ] Firefox DevTools support
-- [ ] Local Ollama mode for fully offline inference  
-- [ ] Team sync — share drift reports across developers
-- [ ] CI/CD integration — fail builds on contract drift
-- [ ] GraphQL support
-- [ ] Historical drift timeline
-
----
-
 ## License
 
 MIT — use it, fork it, ship it.
