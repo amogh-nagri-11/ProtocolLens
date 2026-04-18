@@ -1,15 +1,22 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { addToBatch } from './batcher'
-import { inferSchema, type InferredSchema, type FieldSchema } from './gemini'
-import { saveSchema, getSchema, saveEntry, saveDrift, getDrift, saveSpec, getSpec, getAllSchemas } from './db'
+import { inferSchema, type FieldSchema, type InferredSchema } from './gemini'
+import {
+  clearRuntimeData,
+  getDrift,
+  getSchema,
+  saveDrift,
+  saveEntry,
+  saveSchema,
+} from './db'
 import { generateCode } from './schema-generator'
 import { CodeBlock } from './CodeBlock'
-import { analyzeDrift } from './drift'
+import { analyzeDrift, type DriftReport } from './drift'
 import { DriftView } from './DriftView'
-import { SpecLoader } from './SpecLoader'
 import { MockExporter } from './MockExporter'
+import { SpecLoader } from './SpecLoader'
 import type { OpenAPIV3 } from 'openapi-types'
-import type { DriftReport } from './drift'
+import './app.css'
 
 type HarEntry = {
   url: string
@@ -20,90 +27,88 @@ type HarEntry = {
 }
 
 type Tab = 'payload' | 'schema' | 'drift'
+type Theme = 'light' | 'dark'
 
 const METHOD_COLORS: Record<string, string> = {
-  GET: '#3dd68c',
-  POST: '#60a5fa',
-  PUT: '#f59e0b',
-  DELETE: '#f87171',
-  PATCH: '#a78bfa',
+  GET: '#16a34a',
+  POST: '#2563eb',
+  PUT: '#d97706',
+  DELETE: '#dc2626',
+  PATCH: '#7c3aed',
 }
 
-const STATUS_COLOR = (s: number) =>
-  s < 300 ? '#3dd68c' : s < 400 ? '#f59e0b' : '#f87171'
+const statusClass = (status: number) => {
+  if (status < 300) return 'status-ok'
+  if (status < 400) return 'status-warn'
+  return 'status-error'
+}
 
-function semanticColor(t: string): string {
-  if (t.includes('datetime') || t.includes('date')) return '#34d399'
-  if (t === 'uuid') return '#a78bfa'
-  if (t === 'email') return '#60a5fa'
-  if (t === 'url') return '#38bdf8'
-  if (t.includes('currency')) return '#3dd68c'
-  if (t === 'unknown') return '#6b7280'
-  return '#fb923c'
+function timeAgo(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  if (diff < 1000) return 'just now'
+  if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+  return `${Math.floor(diff / 3600000)}h ago`
+}
+
+function semanticColor(type: string): string {
+  if (type.includes('datetime') || type.includes('date')) return 'var(--semantic-date)'
+  if (type === 'uuid') return 'var(--semantic-uuid)'
+  if (type === 'email') return 'var(--semantic-email)'
+  if (type === 'url') return 'var(--semantic-url)'
+  if (type.includes('currency')) return 'var(--semantic-currency)'
+  if (type === 'unknown') return 'var(--text-muted)'
+  return 'var(--semantic-generic)'
 }
 
 function MethodBadge({ method }: { method: string }) {
+  const color = METHOD_COLORS[method] ?? 'var(--text-muted)'
   return (
-    <span style={{
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: '0.05em',
-      color: METHOD_COLORS[method] ?? '#9ca3af',
-      background: `${METHOD_COLORS[method] ?? '#9ca3af'}15`,
-      border: `1px solid ${METHOD_COLORS[method] ?? '#9ca3af'}30`,
-      borderRadius: 3,
-      padding: '1px 5px',
-      minWidth: 36,
-      textAlign: 'center' as const,
-      display: 'inline-block',
-    }}>
+    <span
+      className="method-badge"
+      style={{
+        color,
+        background: `${color}12`,
+        border: `1px solid ${color}28`,
+      }}
+    >
       {method}
     </span>
   )
 }
 
 function FieldRow({ name, field }: { name: string; field: FieldSchema }) {
+  const semantic = semanticColor(field.semanticType)
+
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '180px 70px 150px 70px 50px 1fr',
-      gap: 6,
-      padding: '5px 16px',
-      borderBottom: '1px solid #ffffff08',
-      fontSize: 11,
-      alignItems: 'center',
-      transition: 'background 0.1s',
-    }}
-      onMouseEnter={e => (e.currentTarget.style.background = '#ffffff05')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-    >
-      <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontSize: 11 }}>{name}</span>
-      <span style={{ color: '#6b7280', fontSize: 10 }}>{field.type}</span>
-      <span style={{
-        color: semanticColor(field.semanticType),
-        background: `${semanticColor(field.semanticType)}15`,
-        padding: '1px 6px',
-        borderRadius: 3,
-        fontSize: 10,
-        fontFamily: 'monospace',
-        display: 'inline-block',
-      }}>
+    <div className="schema-row">
+      <span className="schema-field">{name}</span>
+      <span className="schema-type">{field.type}</span>
+      <span
+        className="schema-semantic"
+        style={{
+          color: semantic,
+          background: `${semantic}14`,
+          border: `1px solid ${semantic}22`,
+        }}
+      >
         {field.semanticType}
       </span>
-      <span style={{
-        color: field.nullable ? '#f87171' : '#374151',
-        fontSize: 10,
-        fontFamily: 'monospace',
-      }}>
-        {field.nullable ? 'nullable' : '—'}
+      <span className={field.nullable ? 'schema-nullable nullable' : 'schema-nullable'}>
+        {field.nullable ? 'nullable' : 'required'}
       </span>
-      <span style={{
-        color: field.confidence > 0.8 ? '#3dd68c' : field.confidence > 0.5 ? '#f59e0b' : '#f87171',
-        fontSize: 10,
-      }}>
+      <span
+        className={
+          field.confidence > 0.8
+            ? 'schema-confidence high'
+            : field.confidence > 0.5
+              ? 'schema-confidence medium'
+              : 'schema-confidence low'
+        }
+      >
         {Math.round(field.confidence * 100)}%
       </span>
-      <span style={{ color: '#4b5563', fontSize: 10, fontStyle: 'italic' }}>{field.notes}</span>
+      <span className="schema-notes">{field.notes || 'No additional notes'}</span>
     </div>
   )
 }
@@ -113,48 +118,38 @@ function SchemaView({ schema }: { schema: InferredSchema }) {
   const [activeCode, setActiveCode] = useState<'ts' | 'zod'>('ts')
 
   return (
-    <div>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '180px 70px 150px 70px 50px 1fr',
-        gap: 6,
-        padding: '6px 16px',
-        borderBottom: '1px solid #ffffff08',
-        fontSize: 10,
-        color: '#374151',
-        letterSpacing: '0.05em',
-        textTransform: 'uppercase' as const,
-      }}>
-        <span>field</span><span>type</span><span>semantic</span>
-        <span>nullable</span><span>conf.</span><span>notes</span>
+    <div className="schema-panel">
+      <div className="schema-header">
+        <span>Field</span>
+        <span>Type</span>
+        <span>Semantic</span>
+        <span>Nullability</span>
+        <span>Confidence</span>
+        <span>Notes</span>
       </div>
-
       {Object.entries(schema.fields).map(([name, field]) => (
         <FieldRow key={name} name={name} field={field} />
       ))}
 
-      <div style={{ padding: '16px', borderTop: '1px solid #ffffff08', marginTop: 8 }}>
-        <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-          {(['ts', 'zod'] as const).map(type => (
-            <button
-              key={type}
-              onClick={() => setActiveCode(type)}
-              style={{
-                padding: '3px 10px',
-                fontSize: 10,
-                fontFamily: 'monospace',
-                background: activeCode === type ? '#ffffff10' : 'transparent',
-                border: `1px solid ${activeCode === type ? '#ffffff20' : '#ffffff08'}`,
-                color: activeCode === type ? '#e5e7eb' : '#6b7280',
-                borderRadius: 4,
-                cursor: 'pointer',
-                letterSpacing: '0.05em',
-              }}
-            >
-              {type === 'ts' ? 'TypeScript' : 'Zod'}
-            </button>
-          ))}
+      <div className="code-section">
+        <div className="section-heading-row">
+          <div>
+            <div className="section-title">Generated Artifacts</div>
+            <div className="section-subtitle">Switch between the TypeScript interface and the Zod schema.</div>
+          </div>
+          <div className="code-toggle">
+            {(['ts', 'zod'] as const).map((type) => (
+              <button
+                key={type}
+                onClick={() => setActiveCode(type)}
+                className={`code-toggle-btn ${activeCode === type ? 'active' : 'inactive'}`}
+              >
+                {type === 'ts' ? 'TypeScript' : 'Zod'}
+              </button>
+            ))}
+          </div>
         </div>
+
         <CodeBlock
           code={activeCode === 'ts' ? tsInterface : zodSchema}
           language={activeCode === 'ts' ? 'typescript' : 'zod'}
@@ -164,19 +159,13 @@ function SchemaView({ schema }: { schema: InferredSchema }) {
   )
 }
 
-function EmptyState({ icon, text }: { icon: string; text: string }) {
+function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column' as const,
-      alignItems: 'center',
-      justifyContent: 'center',
-      height: '100%',
-      gap: 12,
-      color: '#374151',
-    }}>
-      <span style={{ fontSize: 28 }}>{icon}</span>
-      <span style={{ fontSize: 12, textAlign: 'center' as const, maxWidth: 200, lineHeight: 1.6 }}>{text}</span>
+    <div className="empty-state">
+      <div className="empty-state-card">
+        <div className="empty-state-title">{title}</div>
+        <div className="empty-state-text">{detail}</div>
+      </div>
     </div>
   )
 }
@@ -192,26 +181,54 @@ export default function App() {
   const [driftCounts, setDriftCounts] = useState<Map<string, number>>(new Map())
   const [allSchemas, setAllSchemas] = useState<Record<string, InferredSchema>>({})
   const [filter, setFilter] = useState('')
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = window.localStorage.getItem('protocol-lens-theme')
+    return saved === 'dark' ? 'dark' : 'light'
+  })
+  const [leftWidth, setLeftWidth] = useState(360)
+  const [isDragging, setIsDragging] = useState(false)
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState(false)
+  const [isPayloadMinimized, setIsPayloadMinimized] = useState(false)
+
   const specRef = useRef<OpenAPIV3.Document | null>(null)
 
-  useEffect(() => { specRef.current = spec }, [spec])
+  useEffect(() => {
+    specRef.current = spec
+  }, [spec])
 
   useEffect(() => {
-    getSpec().then(saved => {
-      if (saved != null) setSpec(saved as OpenAPIV3.Document)
-    })
-    getAllSchemas().then(schemas => {
-      const map: Record<string, InferredSchema> = {}
-      for (const s of schemas) map[s.endpoint] = s
-      setAllSchemas(map)
-    })
+    window.localStorage.setItem('protocol-lens-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    clearRuntimeData().catch((err) => console.error('Failed to clear session data:', err))
   }, [])
+
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handleMove = (event: MouseEvent) => {
+      const nextWidth = Math.min(Math.max(event.clientX, 260), window.innerWidth * 0.65)
+      setLeftWidth(nextWidth)
+    }
+
+    const handleUp = () => setIsDragging(false)
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [isDragging])
 
   useEffect(() => {
     const listener = async (message: { type: string; data: HarEntry }) => {
       if (message.type !== 'HAR_ENTRY') return
+
       const entry = message.data
-      setEntries(prev => [entry, ...prev])
+      setEntries((prev) => [entry, ...prev].slice(0, 200))
       await saveEntry(entry)
 
       const batch = addToBatch(entry)
@@ -219,21 +236,23 @@ export default function App() {
 
       const path = new URL(entry.url).pathname
       const existing = await getSchema(`${entry.method} ${path}`)
-      const shouldInfer = !existing && batch.samples.length >= 1 ||
-        batch.samples.length === 5 || batch.samples.length === 10
+      const shouldInfer =
+        (!existing && batch.samples.length >= 1) ||
+        batch.samples.length === 5 ||
+        batch.samples.length === 10
 
       if (shouldInfer && batch.samples.length > 0) {
         try {
           const inferred = await inferSchema(entry.method, path, batch.samples)
           await saveSchema(inferred)
-          setAllSchemas(prev => ({ ...prev, [inferred.endpoint]: inferred }))
+          setAllSchemas((prev) => ({ ...prev, [inferred.endpoint]: inferred }))
 
-          const currentSpec = specRef.current ?? (await getSpec() as OpenAPIV3.Document | null)
+          const currentSpec = specRef.current
           if (currentSpec != null) {
             const report = analyzeDrift(inferred, currentSpec, entry.method, path)
             await saveDrift(report)
-            const errorCount = report.drifts.filter(d => d.severity === 'error').length
-            setDriftCounts(prev => new Map(prev).set(`${entry.method} ${path}`, errorCount))
+            const errorCount = report.drifts.filter((drift) => drift.severity === 'error').length
+            setDriftCounts((prev) => new Map(prev).set(`${entry.method} ${path}`, errorCount))
           }
         } catch (err) {
           console.error('Inference error:', err)
@@ -248,20 +267,25 @@ export default function App() {
   async function handleSpecLoaded(newSpec: OpenAPIV3.Document) {
     setSpec(newSpec)
     specRef.current = newSpec
-    await saveSpec(newSpec)
   }
 
-  async function handleTabClick(t: Tab) {
-    setTab(t)
-    if (t === 'drift' && selected && specRef.current && !driftReport) {
+  async function handleTabClick(nextTab: Tab) {
+    setTab(nextTab)
+
+    const currentSpec = specRef.current ?? spec
+
+    if (nextTab === 'drift' && selected && currentSpec) {
       try {
         const path = new URL(selected.url).pathname
         const key = `${selected.method} ${path}`
         const cachedSchema = await getSchema(key)
+
         if (cachedSchema) {
-          const report = analyzeDrift(cachedSchema, specRef.current, selected.method, path)
+          const report = analyzeDrift(cachedSchema, currentSpec, selected.method, path)
           await saveDrift(report)
           setDriftReport(report)
+        } else {
+          setDriftReport(null)
         }
       } catch (err) {
         console.error('Drift analysis failed:', err)
@@ -273,25 +297,29 @@ export default function App() {
     setSelected(entry)
     setSchema(null)
     setDriftReport(null)
+    setIsPayloadMinimized(false)
     setInferring(true)
 
     try {
       const path = new URL(entry.url).pathname
       const key = `${entry.method} ${path}`
+      const currentSpec = specRef.current ?? spec
 
       const cached = await getSchema(key)
       if (cached) {
         setSchema(cached)
-        if (specRef.current) {
+
+        if (currentSpec) {
           const cachedDrift = await getDrift(key)
           if (cachedDrift != null) {
             setDriftReport(cachedDrift)
           } else {
-            const report = analyzeDrift(cached, specRef.current, entry.method, path)
+            const report = analyzeDrift(cached, currentSpec, entry.method, path)
             await saveDrift(report)
             setDriftReport(report)
           }
         }
+
         setInferring(false)
         return
       }
@@ -299,10 +327,10 @@ export default function App() {
       const inferred = await inferSchema(entry.method, path, [entry.payload])
       await saveSchema(inferred)
       setSchema(inferred)
-      setAllSchemas(prev => ({ ...prev, [inferred.endpoint]: inferred }))
+      setAllSchemas((prev) => ({ ...prev, [inferred.endpoint]: inferred }))
 
-      if (specRef.current) {
-        const report = analyzeDrift(inferred, specRef.current, entry.method, path)
+      if (currentSpec) {
+        const report = analyzeDrift(inferred, currentSpec, entry.method, path)
         await saveDrift(report)
         setDriftReport(report)
       }
@@ -313,290 +341,269 @@ export default function App() {
     }
   }
 
-  const filteredEntries = entries.filter(e => {
-    const path = (() => { try { return new URL(e.url).pathname } catch { return e.url } })()
-    return path.toLowerCase().includes(filter.toLowerCase()) ||
-      e.method.toLowerCase().includes(filter.toLowerCase())
+  const filteredEntries = entries.filter((entry) => {
+    const path = (() => {
+      try {
+        return new URL(entry.url).pathname
+      } catch {
+        return entry.url
+      }
+    })()
+
+    return (
+      path.toLowerCase().includes(filter.toLowerCase()) ||
+      entry.method.toLowerCase().includes(filter.toLowerCase())
+    )
   })
 
-  return (
-    <div style={{
-      display: 'flex',
-      height: '100vh',
-      overflow: 'hidden',
-      fontFamily: '"Berkeley Mono", "Fira Code", "Cascadia Code", monospace',
-      background: '#080b10',
-      color: '#e2e8f0',
-      flexDirection: 'column',
-    }}>
-      {/* Header */}
-      <div style={{
-        padding: '8px 16px',
-        borderBottom: '1px solid #ffffff0a',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        background: '#0d1117',
-        flexShrink: 0,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: '#3dd68c',
-            boxShadow: '0 0 6px #3dd68c',
-          }} />
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: '#e2e8f0' }}>
-            PROTOCOL-LENS
-          </span>
-          <span style={{ fontSize: 10, color: '#374151', letterSpacing: '0.05em' }}>
-            v0.1.0
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {spec && (
-            <span style={{ fontSize: 10, color: '#3dd68c' }}>
-              ✓ {Object.keys(spec.paths || {}).length} paths
-            </span>
-          )}
-          <span style={{ fontSize: 10, color: '#374151' }}>
-            {entries.length} captured
-          </span>
-        </div>
-      </div>
-
-      {/* Spec loader */}
-      <div style={{ flexShrink: 0, background: '#0d1117', borderBottom: '1px solid #ffffff08' }}>
-        <SpecLoader onSpecLoaded={handleSpecLoaded} />
-      </div>
-
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Left panel */}
-        <div style={{
-          width: '36%',
-          borderRight: '1px solid #ffffff08',
-          display: 'flex',
-          flexDirection: 'column',
-          background: '#0d1117',
-        }}>
-          {/* Search/filter */}
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid #ffffff08' }}>
-            <input
-              type="text"
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              placeholder="filter requests..."
-              style={{
-                width: '100%',
-                background: '#080b10',
-                border: '1px solid #ffffff0a',
-                borderRadius: 4,
-                color: '#9ca3af',
-                padding: '4px 8px',
-                fontSize: 11,
-                fontFamily: 'inherit',
-                outline: 'none',
-                boxSizing: 'border-box' as const,
-              }}
-            />
-          </div>
-
-          {/* Request list */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {filteredEntries.length === 0 ? (
-              <EmptyState icon="📡" text="Waiting for network requests..." />
-            ) : (
-              filteredEntries.map((entry, i) => {
-                const path = (() => { try { return new URL(entry.url).pathname } catch { return entry.url } })()
-                const driftCount = driftCounts.get(`${entry.method} ${path}`) ?? 0
-                const isSelected = selected === entry
-
-                return (
-                  <div
-                    key={i}
-                    onClick={() => handleSelect(entry)}
-                    style={{
-                      padding: '7px 12px',
-                      borderBottom: '1px solid #ffffff05',
-                      cursor: 'pointer',
-                      background: isSelected ? '#ffffff08' : 'transparent',
-                      borderLeft: isSelected ? '2px solid #3dd68c' : '2px solid transparent',
-                      transition: 'all 0.1s',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                    }}
-                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#ffffff04' }}
-                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}
-                  >
-                    <MethodBadge method={entry.method} />
-                    <span style={{
-                      flex: 1,
-                      color: isSelected ? '#e2e8f0' : '#9ca3af',
-                      fontSize: 11,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap' as const,
-                    }}>
-                      {path}
-                    </span>
-                    <span style={{ fontSize: 10, color: STATUS_COLOR(entry.status) }}>
-                      {entry.status}
-                    </span>
-                    {driftCount > 0 && (
-                      <span style={{
-                        background: '#f8717115',
-                        color: '#f87171',
-                        border: '1px solid #f8717130',
-                        borderRadius: 3,
-                        padding: '0px 4px',
-                        fontSize: 9,
-                        fontWeight: 700,
-                      }}>
-                        {driftCount}
-                      </span>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </div>
-
-          {/* Mock exporter */}
-          <MockExporter schemas={allSchemas} />
-        </div>
-
-        {/* Right panel */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#080b10', overflow: 'hidden' }}>
-          {selected ? (
-            <>
-              {/* URL bar */}
-              <div style={{
-                padding: '6px 16px',
-                borderBottom: '1px solid #ffffff08',
-                fontSize: 10,
-                color: '#4b5563',
-                background: '#0d1117',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap' as const,
-                flexShrink: 0,
-              }}>
-                {selected.url}
-              </div>
-
-              {/* Tabs */}
-              <div style={{
-                display: 'flex',
-                borderBottom: '1px solid #ffffff08',
-                background: '#0d1117',
-                flexShrink: 0,
-              }}>
-                {(['payload', 'schema', 'drift'] as Tab[]).map((t) => {
-                  const driftErrors = t === 'drift' && driftReport
-                    ? driftReport.drifts.filter(d => d.severity === 'error').length
-                    : 0
-                  return (
-                    <button
-                      key={t}
-                      onClick={() => handleTabClick(t)}
-                      style={{
-                        padding: '8px 16px',
-                        background: 'transparent',
-                        border: 'none',
-                        borderBottom: tab === t ? '2px solid #3dd68c' : '2px solid transparent',
-                        color: tab === t ? '#3dd68c' : '#4b5563',
-                        cursor: 'pointer',
-                        fontSize: 11,
-                        fontFamily: 'inherit',
-                        letterSpacing: '0.05em',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        transition: 'color 0.1s',
-                      }}
-                    >
-                      {t.toUpperCase()}
-                      {driftErrors > 0 && (
-                        <span style={{
-                          background: '#f8717120',
-                          color: '#f87171',
-                          borderRadius: 3,
-                          padding: '0 4px',
-                          fontSize: 9,
-                          fontWeight: 700,
-                        }}>
-                          {driftErrors}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-                {inferring && (
-                  <div style={{
-                    marginLeft: 'auto',
-                    padding: '8px 16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    fontSize: 10,
-                    color: '#374151',
-                  }}>
-                    <div style={{
-                      width: 6, height: 6, borderRadius: '50%',
-                      background: '#3dd68c',
-                      animation: 'pulse 1s infinite',
-                    }} />
-                    inferring...
-                  </div>
-                )}
-              </div>
-
-              {/* Tab content */}
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {tab === 'payload' && (
-                  <pre style={{
-                    fontSize: 11,
-                    color: '#fb923c',
-                    margin: 0,
-                    padding: 16,
-                    lineHeight: 1.6,
-                  }}>
-                    {JSON.stringify(selected.payload, null, 2)}
-                  </pre>
-                )}
-                {tab === 'schema' && (
-                  schema
-                    ? <SchemaView schema={schema} />
-                    : <EmptyState icon="🔍" text={inferring ? 'Running AI inference...' : 'No schema captured yet'} />
-                )}
-                {tab === 'drift' && (
-                  !spec
-                    ? <EmptyState icon="📄" text="Load an OpenAPI spec to detect contract drifts" />
-                    : driftReport
-                      ? <DriftView report={driftReport} />
-                      : <EmptyState icon="⚡" text={inferring ? 'Analyzing drift...' : 'No drift data yet'} />
-                )}
-              </div>
-            </>
-          ) : (
-            <EmptyState icon="←" text="Select a request from the left panel to inspect" />
-          )}
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
+  const selectedPath = selected
+    ? (() => {
+        try {
+          return new URL(selected.url).pathname
+        } catch {
+          return selected.url
         }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #ffffff10; border-radius: 2px; }
-        ::-webkit-scrollbar-thumb:hover { background: #ffffff20; }
-        input::placeholder { color: #374151; }
-        input:focus { border-color: #ffffff15 !important; }
-        button:hover { opacity: 0.8; }
-      `}</style>
+      })()
+    : ''
+
+  const payloadSize = selected ? JSON.stringify(selected.payload, null, 2).length : 0
+
+  return (
+    <div className="app-shell" data-theme={theme}>
+      <div className="app-frame">
+        <div className="header">
+          <div className="header-title">
+            <div className="header-kicker">Protocol Lens</div>
+            <div className="header-subtitle">Inspect payloads, generated schemas, and contract drift in one place.</div>
+          </div>
+
+          <div className="header-meta">
+            <div className="header-stat">
+              <span className="header-stat-label">Captured</span>
+              <span className="header-stat-value">{entries.length}</span>
+            </div>
+            <div className="header-stat">
+              <span className="header-stat-label">Spec</span>
+              <span className="header-stat-value">{spec ? `${Object.keys(spec.paths || {}).length} paths` : 'Not loaded'}</span>
+            </div>
+            <button
+              className="ui-btn ui-btn-secondary"
+              onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')}
+            >
+              {theme === 'light' ? 'Dark mode' : 'Light mode'}
+            </button>
+          </div>
+        </div>
+
+        <SpecLoader onSpecLoaded={handleSpecLoaded} />
+
+        <div className="workspace">
+          <aside
+            className={`left-panel ${isLeftCollapsed ? 'collapsed' : ''}`}
+            style={isLeftCollapsed ? undefined : { width: leftWidth }}
+          >
+            <div className="pane-header">
+              <div>
+                <div className="pane-title">Requests</div>
+                <div className="pane-subtitle">Filter, browse, and reopen captured traffic.</div>
+              </div>
+              <div className="pane-actions">
+                <button
+                  className="ui-btn ui-btn-ghost"
+                  onClick={() => {
+                    setEntries([])
+                    setSelected(null)
+                    setSchema(null)
+                    setDriftReport(null)
+                  }}
+                >
+                  Clear
+                </button>
+                <button
+                  className="ui-btn ui-btn-ghost"
+                  onClick={() => setIsLeftCollapsed((value) => !value)}
+                >
+                  {isLeftCollapsed ? 'Expand' : 'Collapse'}
+                </button>
+              </div>
+            </div>
+
+            {!isLeftCollapsed && (
+              <>
+                <div className="filter-bar">
+                  <input
+                    type="text"
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder="Filter by method or path"
+                    className="filter-input"
+                  />
+                </div>
+
+                <div className="request-list">
+                  {filteredEntries.length === 0 ? (
+                    <EmptyState
+                      title="No requests yet"
+                      detail="Open a page and trigger network traffic to start inspecting responses here."
+                    />
+                  ) : (
+                    filteredEntries.map((entry, index) => {
+                      const path = (() => {
+                        try {
+                          return new URL(entry.url).pathname
+                        } catch {
+                          return entry.url
+                        }
+                      })()
+                      const driftCount = driftCounts.get(`${entry.method} ${path}`) ?? 0
+                      const isSelected = selected === entry
+
+                      return (
+                        <button
+                          key={index}
+                          className={`entry-row ${isSelected ? 'selected' : ''}`}
+                          onClick={() => handleSelect(entry)}
+                        >
+                          <div className="entry-main">
+                            <MethodBadge method={entry.method} />
+                            <span className="entry-path">{path}</span>
+                          </div>
+                          <div className="entry-meta">
+                            <span className={`status-pill ${statusClass(entry.status)}`}>{entry.status}</span>
+                            {driftCount > 0 && <span className="drift-count-badge">{driftCount}</span>}
+                            <span className="timestamp">{timeAgo(entry.timestamp)}</span>
+                          </div>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+
+                <MockExporter schemas={allSchemas} />
+              </>
+            )}
+          </aside>
+
+          <div
+            className={`panel-resizer ${isLeftCollapsed ? 'hidden' : ''} ${isDragging ? 'dragging' : ''}`}
+            onMouseDown={() => setIsDragging(true)}
+            onDoubleClick={() => setLeftWidth(360)}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize request list"
+          />
+
+          <main className="right-panel">
+            {selected ? (
+              <>
+                <div className="pane-header pane-header-main">
+                  <div>
+                    <div className="pane-title">Request Details</div>
+                    <div className="pane-subtitle request-url">{selected.url}</div>
+                  </div>
+                  <div className="detail-summary">
+                    <MethodBadge method={selected.method} />
+                    <span className={`status-pill ${statusClass(selected.status)}`}>{selected.status}</span>
+                    <span className="detail-chip">{timeAgo(selected.timestamp)}</span>
+                    <span className="detail-chip">{selectedPath}</span>
+                  </div>
+                </div>
+
+                <div className="tabs">
+                  {(['payload', 'schema', 'drift'] as Tab[]).map((nextTab) => {
+                    const driftErrors = nextTab === 'drift' && driftReport
+                      ? driftReport.drifts.filter((drift) => drift.severity === 'error').length
+                      : 0
+
+                    return (
+                      <button
+                        key={nextTab}
+                        onClick={() => handleTabClick(nextTab)}
+                        className={`tab-btn ${tab === nextTab ? 'active' : 'inactive'}`}
+                      >
+                        {nextTab}
+                        {driftErrors > 0 && <span className="tab-error-badge">{driftErrors}</span>}
+                      </button>
+                    )
+                  })}
+
+                  {inferring && (
+                    <div className="inferring-indicator">
+                      <div className="inferring-dot" />
+                      Processing response
+                    </div>
+                  )}
+                </div>
+
+                <div className="content-area tab-content">
+                  {tab === 'payload' && (
+                    <div className="content-card payload-card">
+                      <div className="section-heading-row">
+                        <div>
+                          <div className="section-title">Payload</div>
+                          <div className="section-subtitle">Raw JSON captured from the selected response.</div>
+                        </div>
+                        <div className="payload-actions">
+                          <button
+                            className="ui-btn ui-btn-secondary"
+                            onClick={() => setIsPayloadMinimized((value) => !value)}
+                          >
+                            {isPayloadMinimized ? 'Show body' : 'Hide body'}
+                          </button>
+                        </div>
+                      </div>
+                      {isPayloadMinimized ? (
+                        <div className="payload-summary" role="button" onClick={() => setIsPayloadMinimized(false)}>
+                          <div className="payload-summary-main">
+                            <span className="payload-summary-title">Payload hidden</span>
+                            <span className="payload-summary-text">
+                              Click to reveal the captured JSON body.
+                            </span>
+                          </div>
+                          <div className="payload-summary-meta">
+                            <span className="detail-chip">{Math.max(1, Math.round(payloadSize / 1024))} KB</span>
+                            <span className="detail-chip">JSON</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <pre className="payload-view">{JSON.stringify(selected.payload, null, 2)}</pre>
+                      )}
+                    </div>
+                  )}
+
+                  {tab === 'schema' && (
+                    schema
+                      ? <SchemaView schema={schema} />
+                      : <EmptyState
+                          title="Schema not ready"
+                          detail={inferring ? 'Schema inference is still running for this response.' : 'Select a captured response with a JSON payload to generate a schema.'}
+                        />
+                  )}
+
+                  {tab === 'drift' && (
+                    !spec
+                      ? <EmptyState
+                          title="OpenAPI spec required"
+                          detail="Load a spec above to compare captured responses against the documented contract."
+                        />
+                      : driftReport
+                        ? <DriftView report={driftReport} />
+                        : <EmptyState
+                            title="No drift report yet"
+                            detail={inferring ? 'Drift analysis is being prepared for this request.' : 'Open a captured request with an inferred schema to see drift analysis here.'}
+                          />
+                  )}
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                title="Nothing selected"
+                detail="Choose a request from the left panel to inspect the payload, generated schema, and drift report."
+              />
+            )}
+          </main>
+        </div>
+      </div>
     </div>
   )
 }

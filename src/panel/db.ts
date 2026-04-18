@@ -87,3 +87,16 @@ export async function getSpec() {
   const db = await getDB() 
   return (await db.get('spec', 'current')) ?? null
 }
+
+export async function clearSpec() {
+  const db = await getDB()
+  await db.delete('spec', 'current')
+}
+
+export async function clearRuntimeData() {
+  const db = await getDB()
+  await db.clear('schemas')
+  await db.clear('entries')
+  await db.clear('drifts')
+  await db.clear('spec')
+}

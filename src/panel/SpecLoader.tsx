@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ChangeEvent } from 'react'
 import type { OpenAPIV3 } from 'openapi-types'
 
 type Props = {
@@ -12,12 +12,14 @@ export function SpecLoader({ onSpecLoaded }: Props) {
 
   async function handleLoadUrl() {
     if (!url.trim()) return
+
     setLoading(true)
     setError(null)
+
     try {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const spec = await res.json()
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const spec = await response.json()
       onSpecLoaded(spec)
     } catch (err) {
       setError(`Failed to load: ${err instanceof Error ? err.message : 'unknown'}`)
@@ -26,13 +28,14 @@ export function SpecLoader({ onSpecLoaded }: Props) {
     }
   }
 
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
+  function handleFileUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
     if (!file) return
+
     const reader = new FileReader()
-    reader.onload = (ev) => {
+    reader.onload = (loadEvent) => {
       try {
-        const spec = JSON.parse(ev.target?.result as string)
+        const spec = JSON.parse(loadEvent.target?.result as string)
         onSpecLoaded(spec)
         setError(null)
       } catch {
@@ -43,58 +46,35 @@ export function SpecLoader({ onSpecLoaded }: Props) {
   }
 
   return (
-    <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span style={{ fontSize: 10, color: '#374151', letterSpacing: '0.05em', whiteSpace: 'nowrap' as const }}>
-        SPEC
-      </span>
-      <input
-        type="text"
-        value={url}
-        onChange={e => setUrl(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handleLoadUrl()}
-        placeholder="openapi.json url or upload file →"
-        style={{
-          flex: 1,
-          background: 'transparent',
-          border: 'none',
-          borderBottom: '1px solid #ffffff0a',
-          color: '#9ca3af',
-          padding: '2px 0',
-          fontSize: 11,
-          fontFamily: 'inherit',
-          outline: 'none',
-        }}
-      />
-      <button
-        onClick={handleLoadUrl}
-        disabled={loading}
-        style={{
-          background: 'transparent',
-          border: '1px solid #ffffff10',
-          color: '#4b5563',
-          padding: '2px 10px',
-          borderRadius: 3,
-          fontSize: 10,
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-          letterSpacing: '0.05em',
-        }}
-      >
-        {loading ? '...' : 'LOAD'}
-      </button>
-      <label style={{
-        fontSize: 10,
-        color: '#374151',
-        cursor: 'pointer',
-        letterSpacing: '0.05em',
-        whiteSpace: 'nowrap' as const,
-      }}>
-        UPLOAD
-        <input type="file" accept=".json" onChange={handleFileUpload} style={{ display: 'none' }} />
-      </label>
-      {error && (
-        <span style={{ fontSize: 10, color: '#f87171' }}>{error}</span>
-      )}
+    <div className="spec-loader">
+      <div className="spec-loader-copy">
+        <div className="pane-title">Contract Source</div>
+        <div className="pane-subtitle">Load an OpenAPI document from a URL or local file.</div>
+      </div>
+
+      <div className="spec-loader-controls">
+        <input
+          type="text"
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          onKeyDown={(event) => event.key === 'Enter' && handleLoadUrl()}
+          placeholder="https://example.com/openapi.json"
+          className="spec-loader-input"
+        />
+        <button
+          onClick={handleLoadUrl}
+          disabled={loading}
+          className="ui-btn ui-btn-primary"
+        >
+          {loading ? 'Loading...' : 'Load URL'}
+        </button>
+        <label className="ui-btn ui-btn-secondary spec-upload-btn">
+          Upload file
+          <input type="file" accept=".json" onChange={handleFileUpload} style={{ display: 'none' }} />
+        </label>
+      </div>
+
+      {error && <div className="spec-loader-error">{error}</div>}
     </div>
   )
 }

@@ -11,6 +11,7 @@ export default defineConfig({
         { src: 'manifest.json', dest: '.' },
         { src: 'src/devtools/devtools.html', dest: '.' },
         { src: 'src/panel/panel.html', dest: '.' },
+        { src: 'public/icon.svg', dest: '.' },
       ]
     })
   ],
